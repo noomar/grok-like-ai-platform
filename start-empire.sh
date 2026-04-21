@@ -71,11 +71,28 @@ AURORA_SESSION_SECRET=${session_secret}
 # OPENAI_API_KEY=
 # FLY_API_TOKEN=
 
-# Heartbeat (optional) — when set, scripts/heartbeat.sh pings your Telegram bot
-# on every ./start-empire.sh with the live URL + terminal link.
+# Heartbeat — scripts/heartbeat.sh fires on every ./start-empire.sh.
+# Configure any combination of channels:
+#
+# A) Email via Resend (easiest — just one API key)
+# RESEND_API_KEY=re_...
+# EMAIL_TO=you@example.com
+# EMAIL_FROM=onboarding@resend.dev
+#
+# B) Email via generic SMTP (Gmail app password, Mailgun, Brevo, etc.)
+# SMTP_HOST=smtp.gmail.com
+# SMTP_PORT=587
+# SMTP_USER=you@gmail.com
+# SMTP_PASS=<16-char Gmail app password>
+# EMAIL_TO=you@example.com
+#
+# C) Telegram
 # TELEGRAM_BOT_TOKEN=
 # TELEGRAM_CHAT_ID=
+#
+# Common options:
 # AURORA_PUBLIC_URL=https://empire.example.com
+# HEARTBEAT_INCLUDE_PASSWORD=false  # set true to email the admin password literally (not recommended)
 
 # Encrypted backups (required only if you run scripts/backup-nest.sh).
 # BACKUP_GPG_PASSPHRASE=
@@ -143,9 +160,17 @@ printf "\n"
 
 # ---------- 6. Heartbeat (best-effort) ----------
 
-if [ -n "${TELEGRAM_BOT_TOKEN:-}" ] && [ -n "${TELEGRAM_CHAT_ID:-}" ]; then
-  log "Telegram heartbeat configured — sending boot ping…"
+heartbeat_configured=no
+if [ -n "${RESEND_API_KEY:-}" ] && [ -n "${EMAIL_TO:-}" ]; then heartbeat_configured=yes; fi
+if [ -n "${SMTP_HOST:-}" ] && [ -n "${SMTP_USER:-}" ] && [ -n "${SMTP_PASS:-}" ] && [ -n "${EMAIL_TO:-}" ]; then heartbeat_configured=yes; fi
+if [ -n "${TELEGRAM_BOT_TOKEN:-}" ] && [ -n "${TELEGRAM_CHAT_ID:-}" ]; then heartbeat_configured=yes; fi
+
+if [ "$heartbeat_configured" = "yes" ]; then
+  log "Heartbeat channel(s) configured — sending boot ping…"
   HEARTBEAT_EVENT=boot "$here/scripts/heartbeat.sh" || warn "heartbeat failed (non-fatal)"
 else
-  log "Telegram heartbeat not configured (set TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID in .env to enable)."
+  log "Heartbeat not configured. To enable, set one of:"
+  log "  RESEND_API_KEY + EMAIL_TO   (email via Resend)"
+  log "  SMTP_HOST + SMTP_USER + SMTP_PASS + EMAIL_TO  (email via SMTP)"
+  log "  TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID   (Telegram)"
 fi

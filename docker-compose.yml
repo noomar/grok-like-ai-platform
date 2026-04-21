@@ -1,0 +1,68 @@
+# Aurora AI Platform — self-hosted stack.
+#
+# Brings up:
+#   - app:          Next.js (Aurora) on :3000, SQLite persistence at /data
+#   - render-worker: FastAPI + ffmpeg worker on :7860 (the hf-space provider)
+#
+# Usage:
+#   docker compose up -d --build
+#   # App at http://localhost:3000, worker at http://localhost:7860
+#
+# Reverse-proxy with Caddy / Traefik / Nginx in front for TLS.
+# Migrate the whole Nest with `scripts/migrate-nest.mjs` (see /admin/nest).
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: aurora:latest
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      # Sovereign defaults. Override with a .env file or platform env vars.
+      NODE_ENV: production
+      AURORA_STORAGE: sqlite
+      AURORA_SQLITE_PATH: /data/aurora.db
+      # Wire the app to the sibling render-worker. Shotstack stays optional.
+      HF_RENDER_URL: "http://render-worker:7860"
+      # Tell the app who / where it is so /admin/nest can surface it.
+      AURORA_NEST_HOST: ${AURORA_NEST_HOST:-docker-compose}
+      AURORA_NEST_REGION: ${AURORA_NEST_REGION:-self-hosted}
+    volumes:
+      - aurora-data:/data
+    depends_on:
+      render-worker:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:3000/api/providers/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 45s
+
+  render-worker:
+    build:
+      context: ./services/render-worker
+    image: aurora-render-worker:latest
+    restart: unless-stopped
+    ports:
+      - "7860:7860"
+    environment:
+      PORT: "7860"
+      # Optional: set a shared bearer token that the app forwards as
+      # HF_RENDER_TOKEN to gate the worker from the public internet.
+      WORKER_TOKEN: ${WORKER_TOKEN:-}
+    volumes:
+      - render-cache:/tmp/aurora-render
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:7860/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+volumes:
+  aurora-data:
+  render-cache:

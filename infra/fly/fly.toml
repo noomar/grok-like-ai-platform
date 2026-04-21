@@ -1,0 +1,66 @@
+# Fly.io deployment for the Aurora Nest.
+#
+# Quickstart (requires flyctl + authenticated account):
+#   cd infra/fly
+#   fly launch --copy-config --no-deploy         # creates the app
+#   fly volumes create aurora_data --size 3 --region ams
+#   fly secrets set SHOTSTACK_API_KEY=xxx ADMIN_PASSWORD=xxx
+#   fly deploy --remote-only
+#
+# Or use scripts/migrate-nest.mjs --target=fly to drive all of the above
+# automatically from a FLY_API_TOKEN.
+
+app = "aurora-nest"
+primary_region = "ams"
+kill_signal = "SIGTERM"
+kill_timeout = "30s"
+
+[build]
+  dockerfile = "../../Dockerfile"
+
+[env]
+  NODE_ENV = "production"
+  AURORA_STORAGE = "sqlite"
+  AURORA_SQLITE_PATH = "/data/aurora.db"
+  AURORA_NEST_HOST = "fly.io"
+  AURORA_NEST_REGION = "ams"
+  PORT = "3000"
+
+[[services]]
+  internal_port = 3000
+  protocol = "tcp"
+  auto_stop_machines = "suspend"
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [[services.ports]]
+    port = 80
+    handlers = ["http"]
+    force_https = true
+
+  [[services.ports]]
+    port = 443
+    handlers = ["tls", "http"]
+
+  [services.concurrency]
+    type = "requests"
+    soft_limit = 60
+    hard_limit = 120
+
+  [[services.http_checks]]
+    interval = "30s"
+    timeout = "5s"
+    grace_period = "30s"
+    method = "get"
+    path = "/api/providers/health"
+    protocol = "http"
+
+[[mounts]]
+  source = "aurora_data"
+  destination = "/data"
+  auto_extend_size_threshold = 80
+
+[[vm]]
+  cpu_kind = "shared"
+  cpus = 1
+  memory_mb = 512

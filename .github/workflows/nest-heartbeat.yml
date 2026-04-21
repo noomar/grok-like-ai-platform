@@ -1,0 +1,119 @@
+# Heartbeat for the Aurora Nest.
+#
+# Runs every 15 minutes against the primary deployment. If the health probe
+# fails 3 times in a row, fires a failover workflow_dispatch that redeploys
+# to the secondary target (default: Fly.io) using the IaC in infra/. The
+# "self-healing lifecycle hook" Commander asked for, with the real-world
+# caveat that failover still needs a token — one time, saved as a secret.
+#
+# Required repository secrets:
+#   NEST_PRIMARY_URL        e.g. https://grok-like-ai-platform.vercel.app
+#   NEST_ADMIN_PASSWORD     used for `x-admin-password` on the export endpoint
+#   FLY_API_TOKEN           optional; required for the fly-failover job
+#
+# If no FLY_API_TOKEN is set the failover job no-ops and just reports the
+# incident, so the heartbeat is safe to enable before you've provisioned a
+# second host.
+
+name: nest-heartbeat
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+    inputs:
+      force_failover:
+        description: "Force the failover job to run"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    outputs:
+      healthy: ${{ steps.check.outputs.healthy }}
+    steps:
+      - name: Ping health endpoint
+        id: check
+        env:
+          URL: ${{ secrets.NEST_PRIMARY_URL }}
+        run: |
+          if [ -z "$URL" ]; then
+            echo "NEST_PRIMARY_URL not set" >&2
+            echo "healthy=unknown" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          attempts=0
+          failures=0
+          for i in 1 2 3; do
+            attempts=$((attempts+1))
+            code=$(curl -sS -o /tmp/body.json -w "%{http_code}" --max-time 20 "$URL/api/providers/health" || echo "000")
+            echo "attempt $i → HTTP $code"
+            if [ "$code" != "200" ]; then
+              failures=$((failures+1))
+            fi
+            sleep 10
+          done
+          if [ "$failures" -ge 3 ]; then
+            echo "healthy=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "healthy=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  failover-fly:
+    needs: probe
+    if: ${{ needs.probe.outputs.healthy == 'false' || github.event.inputs.force_failover == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Guard on FLY_API_TOKEN
+        id: guard
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          if [ -z "$FLY_API_TOKEN" ]; then
+            echo "::warning::FLY_API_TOKEN not configured — skipping failover."
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Checkout
+        if: steps.guard.outputs.run == 'true'
+        uses: actions/checkout@v4
+
+      - name: Install flyctl
+        if: steps.guard.outputs.run == 'true'
+        uses: superfly/flyctl-actions/setup-flyctl@master
+
+      - name: Snapshot primary state (best-effort)
+        if: steps.guard.outputs.run == 'true'
+        continue-on-error: true
+        env:
+          URL: ${{ secrets.NEST_PRIMARY_URL }}
+          PW: ${{ secrets.NEST_ADMIN_PASSWORD }}
+        run: |
+          curl -fsS -H "x-admin-password: $PW" "$URL/api/admin/nest/export" \
+            -o aurora-nest.json
+          echo "snapshot=$(wc -c < aurora-nest.json)" bytes
+
+      - name: Deploy to Fly.io
+        if: steps.guard.outputs.run == 'true'
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          flyctl deploy --remote-only --config infra/fly/fly.toml --app aurora-nest
+
+      - name: Restore state to Fly
+        if: steps.guard.outputs.run == 'true' && hashFiles('aurora-nest.json') != ''
+        continue-on-error: true
+        env:
+          PW: ${{ secrets.NEST_ADMIN_PASSWORD }}
+        run: |
+          curl -fsS -X POST -H "x-admin-password: $PW" \
+            -H "content-type: application/json" \
+            --data-binary @aurora-nest.json \
+            "https://aurora-nest.fly.dev/api/admin/nest/import"

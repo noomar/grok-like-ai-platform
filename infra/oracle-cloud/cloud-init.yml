@@ -1,0 +1,54 @@
+#cloud-config
+# Oracle Cloud Free Tier cloud-init — brings up an Always Free ARM64 VM
+# (VM.Standard.A1.Flex, 4 cores / 24 GB) with Docker + the Aurora Nest.
+#
+# Usage:
+#   1. Create a VM in Oracle Cloud → compute → "Always Free Eligible".
+#   2. Shape: VM.Standard.A1.Flex, 2+ OCPU, 6+ GB.
+#   3. Boot volume: Ubuntu 24.04 Minimal.
+#   4. Paste this YAML into the "Specialty and custom" → "Cloud-init script" box.
+#   5. Add your SSH public key. Open ingress on port 80/443 in the VCN sec list.
+#   6. After first boot (~5 min) the Nest is live on :80.
+
+package_update: true
+package_upgrade: true
+packages:
+  - ca-certificates
+  - curl
+  - git
+  - ufw
+  - docker.io
+  - docker-compose-plugin
+
+write_files:
+  - path: /etc/systemd/system/aurora.service
+    permissions: "0644"
+    content: |
+      [Unit]
+      Description=Aurora Nest (docker compose)
+      Requires=docker.service
+      After=docker.service network-online.target
+      Wants=network-online.target
+
+      [Service]
+      Type=oneshot
+      RemainAfterExit=yes
+      WorkingDirectory=/opt/aurora
+      ExecStart=/usr/bin/docker compose up -d --build
+      ExecStop=/usr/bin/docker compose down
+      TimeoutStartSec=0
+
+      [Install]
+      WantedBy=multi-user.target
+
+runcmd:
+  - [ systemctl, enable, --now, docker ]
+  - [ ufw, allow, "22" ]
+  - [ ufw, allow, "80" ]
+  - [ ufw, allow, "443" ]
+  - [ ufw, --force, enable ]
+  - [ mkdir, -p, /opt/aurora ]
+  - |
+    git clone https://github.com/noomar/grok-like-ai-platform /opt/aurora || \
+      (cd /opt/aurora && git pull)
+  - [ systemctl, enable, --now, aurora.service ]

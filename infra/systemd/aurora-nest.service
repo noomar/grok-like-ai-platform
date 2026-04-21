@@ -1,0 +1,35 @@
+# Aurora Nest — Linux systemd unit for auto-boot.
+#
+# Install:
+#   sudo cp infra/systemd/aurora-nest.service /etc/systemd/system/
+#   sudo sed -i "s|/opt/aurora|$(pwd)|g" /etc/systemd/system/aurora-nest.service
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now aurora-nest
+#
+# Watch it:
+#   sudo systemctl status aurora-nest
+#   sudo journalctl -u aurora-nest -f
+#
+# Stop it:
+#   sudo systemctl stop aurora-nest
+#   sudo systemctl disable aurora-nest
+
+[Unit]
+Description=Aurora Sovereign Nest (Next.js app + render worker via docker compose)
+Documentation=file:///opt/aurora/SOVEREIGN.md
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/opt/aurora
+EnvironmentFile=-/opt/aurora/.env
+ExecStart=/usr/bin/docker compose up -d
+ExecStartPost=/bin/bash -lc '/opt/aurora/scripts/heartbeat.sh || true'
+ExecStop=/usr/bin/docker compose down
+TimeoutStartSec=300
+
+[Install]
+WantedBy=multi-user.target

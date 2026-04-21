@@ -152,3 +152,50 @@ export async function runAgent(goal: string): Promise<AgentRun> {
     finishedAt: new Date().toISOString(),
   };
 }
+
+export type AgentProgress = {
+  onPlan?: (info: { plan: AgentStep[]; summary: string; model: string; plannerMs: number }) => void;
+  onStepStart?: (index: number, step: AgentStep) => void;
+  onStepDone?: (index: number, step: AgentStep) => void;
+};
+
+/**
+ * Streaming variant. Same behavior as runAgent but emits progress callbacks
+ * after the plan is produced and after each step executes. Suitable for
+ * backing an async job queue.
+ */
+export async function runAgentStreaming(
+  goal: string,
+  progress: AgentProgress,
+): Promise<AgentRun> {
+  const startedAt = new Date().toISOString();
+  const { plan, summary, model, plannerMs } = await planGoal(goal);
+  progress.onPlan?.({ plan, summary, model, plannerMs });
+  const executed: AgentStep[] = [];
+  for (let i = 0; i < plan.length; i += 1) {
+    const step = plan[i];
+    progress.onStepStart?.(i, step);
+    const reason = isForbidden(step.command);
+    let finished: AgentStep;
+    if (reason) {
+      finished = { ...step, skipped: true, reason };
+    } else {
+      const result = await execShell(step.command, {
+        timeoutMs: 25_000,
+        maxOutput: 16 * 1024,
+      });
+      finished = { ...step, result };
+    }
+    executed.push(finished);
+    progress.onStepDone?.(i, finished);
+  }
+  return {
+    goal,
+    plan: executed,
+    summary,
+    model,
+    plannerMs,
+    startedAt,
+    finishedAt: new Date().toISOString(),
+  };
+}

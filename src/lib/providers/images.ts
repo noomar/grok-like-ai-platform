@@ -52,18 +52,18 @@ const pollinationsProvider: Provider<ImageInput, ImageOutput> = {
       enhance: "true",
     });
     const url = `https://image.pollinations.ai/prompt/${encodeURIComponent(input.prompt)}?${params.toString()}`;
-    if (input.urlOnly) {
-      // Pollinations serves the image on-demand when Shotstack fetches the URL.
-      // We still do a light HEAD to confirm reachability; failures mark unhealthy.
-      const head = await fetch(url, { method: "HEAD", signal });
-      if (!head.ok) throw new Error(`pollinations HEAD ${head.status}`);
-      return { url, provider: "pollinations", width: w, height: h };
-    }
+    // Pollinations serves images on-demand and sometimes returns 200 OK with
+    // an empty body (before the model finishes). We always do a full GET so
+    // we can verify the body is a real image — this also warms Pollinations'
+    // CDN cache so downstream consumers (Shotstack) hit a hot URL.
     const res = await fetch(url, { signal });
     if (!res.ok) throw new Error(`pollinations ${res.status}`);
     const ab = await res.arrayBuffer();
     const buf = Buffer.from(ab);
-    if (buf.length < 1024) throw new Error("pollinations tiny payload");
+    if (buf.length < 4096) throw new Error(`pollinations tiny payload (${buf.length}B)`);
+    if (input.urlOnly) {
+      return { url, provider: "pollinations", width: w, height: h };
+    }
     return { url, buffer: buf, provider: "pollinations", width: w, height: h };
   },
 };

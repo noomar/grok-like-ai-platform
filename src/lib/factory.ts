@@ -461,8 +461,11 @@ async function runPipelineShotstack(
 }
 
 function buildImagePrompt(title: string, sceneText: string): string {
-  const base = sceneText.length > 120 ? sceneText.slice(0, 120) : sceneText;
-  return `${title}. ${base}. cinematic, futuristic, ultra-detailed, dramatic lighting, 8k`;
+  const cleanTitle = title.replace(/\s+/g, " ").replace(/[.!?]+$/, "").trim();
+  const base = (sceneText.length > 120 ? sceneText.slice(0, 120) : sceneText)
+    .replace(/[.!?]+$/, "")
+    .trim();
+  return `${cleanTitle}. ${base}. cinematic, futuristic, ultra-detailed, dramatic lighting, 8k`;
 }
 
 function hashCode(s: string): number {

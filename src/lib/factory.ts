@@ -90,6 +90,78 @@ export function enqueueJob(input: FactoryInput): FactoryJob {
   return job;
 }
 
+/**
+ * Submit a job synchronously to Shotstack and return the initial FactoryJob
+ * with `engineRenderId` populated. The client is responsible for polling
+ * `/api/factory/status?renderId=...` to track completion. This avoids relying
+ * on any server-side state — important on serverless (Vercel Hobby) where the
+ * in-memory store does not survive between invocations and async work started
+ * by `enqueueJob` is killed when the function returns.
+ */
+export async function submitShotstackJob(input: FactoryInput): Promise<FactoryJob> {
+  if (!hasKey("SHOTSTACK_API_KEY")) {
+    throw new MissingKeyError("SHOTSTACK_API_KEY");
+  }
+  const now = new Date().toISOString();
+  const id = createId("job");
+  const title = input.title.trim() || "Untitled production";
+  const script = input.script;
+  const sceneTexts = splitScenes(script);
+  const totalDurationSec = estimateDurationSec(script);
+  const alignedDurations = sceneDurations(sceneTexts.length, totalDurationSec);
+  const steps = buildSteps();
+  const markDone = (idx: number, summary: string) => {
+    steps[idx].status = "completed";
+    steps[idx].startedAt = now;
+    steps[idx].finishedAt = now;
+    steps[idx].output = summary;
+  };
+
+  markDone(
+    0,
+    `${sceneTexts.length} scene${sceneTexts.length === 1 ? "" : "s"} detected · ~${totalDurationSec}s · engine=shotstack`,
+  );
+  markDone(1, `skipped (no OPENAI_API_KEY · Shotstack silent render)`);
+
+  const scenes = sceneTexts.map((text, i) => ({
+    imageUrl: pollinationsImageUrl(
+      buildImagePrompt(title, text),
+      (i + 1) * 97 + (Math.abs(hashCode(id)) % 1000),
+    ),
+    text,
+    durationSec: alignedDurations[i],
+  }));
+  markDone(2, `${scenes.length} scenes prepared · Pollinations image URLs · Shotstack timeline`);
+  markDone(3, `mood=${input.musicMood ?? DEFAULT_MOOD} · silent (no public audio URL)`);
+
+  const renderId = await createShotstackRender(scenes, null);
+  steps[4].status = "running";
+  steps[4].startedAt = now;
+  steps[4].output = `submitted to Shotstack · id=${renderId}`;
+
+  return {
+    id,
+    title,
+    script,
+    voice: input.voice || DEFAULT_VOICE,
+    musicMood: input.musicMood || DEFAULT_MOOD,
+    status: "running",
+    createdAt: now,
+    updatedAt: now,
+    steps,
+    requestedBy: input.requestedBy,
+    engine: "shotstack",
+    engineRenderId: renderId,
+    engineStatus: "queued",
+    assets: {
+      thumbnailUrl: scenes[0]?.imageUrl,
+      sceneCount: scenes.length,
+      durationSec: totalDurationSec,
+      engineRenderId: renderId,
+    },
+  };
+}
+
 export function listJobs(): FactoryJob[] {
   return Array.from(getStore().jobs.values()).sort((a, b) =>
     b.createdAt.localeCompare(a.createdAt),

@@ -45,6 +45,28 @@ type EnvStatus = {
   images: { provider: string; ready: boolean };
 };
 
+const STORAGE_KEY = "aurora.jobs.v1";
+
+function loadStoredJobs(): FactoryJob[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = window.localStorage.getItem(STORAGE_KEY);
+    if (!raw) return [];
+    return JSON.parse(raw) as FactoryJob[];
+  } catch {
+    return [];
+  }
+}
+
+function saveStoredJobs(jobs: FactoryJob[]) {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(jobs.slice(0, 30)));
+  } catch {
+    /* ignore quota */
+  }
+}
+
 export default function FactoryConsole({ initialJobs }: { initialJobs: FactoryJob[] }) {
   const [jobs, setJobs] = useState<FactoryJob[]>(initialJobs);
   const [title, setTitle] = useState("");
@@ -54,9 +76,30 @@ export default function FactoryConsole({ initialJobs }: { initialJobs: FactoryJo
   const [submitting, setSubmitting] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(initialJobs[0]?.id ?? null);
   const [envStatus, setEnvStatus] = useState<EnvStatus | null>(null);
+  const [submitError, setSubmitError] = useState<string | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const activeJob = jobs.find((j) => j.id === selectedId) ?? jobs[0];
+
+  // Hydrate from localStorage so jobs survive page reloads on serverless hosts.
+  useEffect(() => {
+    const stored = loadStoredJobs();
+    if (stored.length === 0) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setJobs((prev) => {
+      const seen = new Set(prev.map((j) => j.id));
+      return [...prev, ...stored.filter((j) => !seen.has(j.id))];
+    });
+    if (!selectedId && stored[0]) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setSelectedId(stored[0].id);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    if (jobs.length > 0) saveStoredJobs(jobs);
+  }, [jobs]);
 
   useEffect(() => {
     fetch("/api/factory/env-status", { cache: "no-store" })
@@ -65,38 +108,107 @@ export default function FactoryConsole({ initialJobs }: { initialJobs: FactoryJo
       .catch(() => {});
   }, []);
 
+  // Poll Shotstack per-job via our stateless proxy. Updates only change the
+  // running job — other fields stay sourced from the client's own cache.
   useEffect(() => {
-    async function refresh() {
-      const res = await fetch("/api/factory/jobs", { cache: "no-store" });
-      if (!res.ok) return;
-      const data = (await res.json()) as { jobs: FactoryJob[] };
-      setJobs(data.jobs);
+    async function tick() {
+      const running = jobs.filter(
+        (j) => j.status === "running" && j.engine === "shotstack" && j.engineRenderId,
+      );
+      if (running.length === 0) return;
+      const updates = await Promise.all(
+        running.map(async (j) => {
+          try {
+            const res = await fetch(
+              `/api/factory/status?renderId=${encodeURIComponent(j.engineRenderId!)}`,
+              { cache: "no-store" },
+            );
+            if (!res.ok) return null;
+            const s = (await res.json()) as {
+              renderId: string;
+              status: string;
+              url: string | null;
+              error: string | null;
+            };
+            return { jobId: j.id, s };
+          } catch {
+            return null;
+          }
+        }),
+      );
+      setJobs((prev) =>
+        prev.map((j) => {
+          const u = updates.find((x) => x && x.jobId === j.id);
+          if (!u) return j;
+          const next: FactoryJob = { ...j, updatedAt: new Date().toISOString() };
+          next.engineStatus = u.s.status;
+          if (u.s.status === "done" && u.s.url) {
+            next.status = "completed";
+            next.assets = {
+              ...(next.assets ?? {}),
+              videoUrl: u.s.url,
+              downloadUrl: u.s.url,
+            };
+            const finalStep = next.steps[next.steps.length - 1];
+            if (finalStep) {
+              finalStep.status = "completed";
+              finalStep.finishedAt = next.updatedAt;
+              finalStep.output = `MP4 · hosted on Shotstack CDN · id=${u.s.renderId}`;
+            }
+          } else if (u.s.status === "failed") {
+            next.status = "failed";
+            next.errorMessage = u.s.error ?? "Shotstack render failed";
+            const finalStep = next.steps[next.steps.length - 1];
+            if (finalStep) {
+              finalStep.status = "failed";
+              finalStep.finishedAt = next.updatedAt;
+              finalStep.output = next.errorMessage;
+            }
+          }
+          return next;
+        }),
+      );
     }
-    timerRef.current = setInterval(refresh, 1500);
+    timerRef.current = setInterval(tick, 3000);
+    tick();
     return () => {
       if (timerRef.current) clearInterval(timerRef.current);
     };
-  }, []);
+  }, [jobs]);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     if (!script.trim() || submitting) return;
     setSubmitting(true);
-    const res = await fetch("/api/factory/jobs", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ title, script, voice, musicMood: mood }),
-    });
-    const data = (await res.json()) as { job: FactoryJob };
-    setJobs((prev) => [data.job, ...prev]);
-    setSelectedId(data.job.id);
-    setTitle("");
-    setScript("");
-    setSubmitting(false);
+    setSubmitError(null);
+    try {
+      const res = await fetch("/api/factory/jobs", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ title, script, voice, musicMood: mood }),
+      });
+      const data = (await res.json()) as { job?: FactoryJob; error?: string };
+      if (!res.ok || !data.job) {
+        setSubmitError(data.error ?? `Submit failed (${res.status})`);
+        return;
+      }
+      setJobs((prev) => [data.job!, ...prev]);
+      setSelectedId(data.job.id);
+      setTitle("");
+      setScript("");
+    } catch (err) {
+      setSubmitError(err instanceof Error ? err.message : "Submit failed");
+    } finally {
+      setSubmitting(false);
+    }
   }
 
   async function cancel(id: string) {
-    await fetch(`/api/factory/jobs/${id}/cancel`, { method: "POST" });
+    // Best-effort; on serverless we just drop it from local state.
+    await fetch(`/api/factory/jobs/${id}/cancel`, { method: "POST" }).catch(() => null);
+    setJobs((prev) =>
+      prev.map((j) => (j.id === id ? { ...j, status: "failed", errorMessage: "cancelled" } : j)),
+    );
   }
 
   return (
@@ -168,6 +280,11 @@ export default function FactoryConsole({ initialJobs }: { initialJobs: FactoryJo
             {submitting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
             {submitting ? "Queuing…" : "Start production"}
           </button>
+          {submitError && (
+            <div className="rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-xs text-rose-200">
+              {submitError}
+            </div>
+          )}
         </form>
       </section>
 

@@ -72,11 +72,12 @@ AURORA_SESSION_SECRET=${session_secret}
 # FLY_API_TOKEN=
 
 # Heartbeat — scripts/heartbeat.sh fires on every ./start-empire.sh.
-# Configure any combination of channels:
+# On each boot/migration, emails you the live URL, IP, and admin password.
 #
 # A) Email via Resend (easiest — just one API key)
-# RESEND_API_KEY=re_...
-# EMAIL_TO=you@example.com
+RESEND_API_KEY=
+EMAIL_TO=i.y.asikral7@gmail.com
+HEARTBEAT_INCLUDE_PASSWORD=true
 # EMAIL_FROM=onboarding@resend.dev
 #
 # B) Email via generic SMTP (Gmail app password, Mailgun, Brevo, etc.)
@@ -84,7 +85,6 @@ AURORA_SESSION_SECRET=${session_secret}
 # SMTP_PORT=587
 # SMTP_USER=you@gmail.com
 # SMTP_PASS=<16-char Gmail app password>
-# EMAIL_TO=you@example.com
 #
 # C) Telegram
 # TELEGRAM_BOT_TOKEN=
@@ -92,7 +92,6 @@ AURORA_SESSION_SECRET=${session_secret}
 #
 # Common options:
 # AURORA_PUBLIC_URL=https://empire.example.com
-# HEARTBEAT_INCLUDE_PASSWORD=false  # set true to email the admin password literally (not recommended)
 
 # Encrypted backups (required only if you run scripts/backup-nest.sh).
 # BACKUP_GPG_PASSPHRASE=

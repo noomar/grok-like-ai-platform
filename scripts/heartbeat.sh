@@ -123,7 +123,7 @@ send_resend() {
   local to="${EMAIL_TO:?EMAIL_TO not set}"
   # Build JSON payload with python3 (handles escaping of body text correctly).
   local payload
-  payload="$(python3 -c '
+  payload="$(FROM="$from" TO="$to" SUBJECT="$subject" BODY="$body" python3 -c '
 import json, os, sys
 print(json.dumps({
   "from": os.environ["FROM"],
@@ -131,7 +131,7 @@ print(json.dumps({
   "subject": os.environ["SUBJECT"],
   "text": os.environ["BODY"],
 }))
-' FROM="$from" TO="$to" SUBJECT="$subject" BODY="$body" 2>/dev/null)"
+' 2>/dev/null)"
   if [ -z "$payload" ]; then
     echo "[heartbeat][resend] python3 unavailable — cannot build payload" >&2
     return 1

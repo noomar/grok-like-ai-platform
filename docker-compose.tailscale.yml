@@ -1,0 +1,31 @@
+# Tailscale overlay for docker-compose.
+#
+# Activate:
+#   docker compose -f docker-compose.yml -f docker-compose.tailscale.yml up -d
+#
+# Requires TAILSCALE_AUTHKEY in .env (see infra/tunnel/README.md).
+
+services:
+  tailscaled:
+    image: tailscale/tailscale:latest
+    restart: unless-stopped
+    hostname: aurora-nest
+    environment:
+      TS_AUTHKEY: ${TAILSCALE_AUTHKEY:-}
+      TS_HOSTNAME: aurora-nest
+      TS_STATE_DIR: /var/lib/tailscale
+      TS_USERSPACE: "false"
+      TS_EXTRA_ARGS: --accept-dns=false --advertise-tags=tag:aurora
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    volumes:
+      - tailscale-state:/var/lib/tailscale
+    network_mode: "service:app"
+    depends_on:
+      - app
+
+volumes:
+  tailscale-state:

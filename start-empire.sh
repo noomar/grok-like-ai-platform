@@ -71,8 +71,19 @@ AURORA_SESSION_SECRET=${session_secret}
 # OPENAI_API_KEY=
 # FLY_API_TOKEN=
 
+# Heartbeat (optional) — when set, scripts/heartbeat.sh pings your Telegram bot
+# on every ./start-empire.sh with the live URL + terminal link.
+# TELEGRAM_BOT_TOKEN=
+# TELEGRAM_CHAT_ID=
+# AURORA_PUBLIC_URL=https://empire.example.com
+
+# Encrypted backups (required only if you run scripts/backup-nest.sh).
+# BACKUP_GPG_PASSPHRASE=
+# BACKUP_DEST=local:./backups
+
 AURORA_NEST_HOST=sovereign-nest
 AURORA_NEST_REGION=self-hosted
+AURORA_NEST_NAME=$(hostname -s 2>/dev/null || echo sovereign-nest)
 ENV
   chmod 600 .env
   log "Wrote .env (permissions 600)."
@@ -129,3 +140,12 @@ printf "  Stop:         \033[1m%s down\033[0m\n" "${COMPOSE[*]}"
 printf "  Logs:         \033[1m%s logs -f app\033[0m\n" "${COMPOSE[*]}"
 printf "  Re-up:        \033[1m./start-empire.sh\033[0m   (safe to rerun; volume persists)\n"
 printf "\n"
+
+# ---------- 6. Heartbeat (best-effort) ----------
+
+if [ -n "${TELEGRAM_BOT_TOKEN:-}" ] && [ -n "${TELEGRAM_CHAT_ID:-}" ]; then
+  log "Telegram heartbeat configured — sending boot ping…"
+  HEARTBEAT_EVENT=boot "$here/scripts/heartbeat.sh" || warn "heartbeat failed (non-fatal)"
+else
+  log "Telegram heartbeat not configured (set TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID in .env to enable)."
+fi

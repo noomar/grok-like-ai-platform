@@ -1,0 +1,18 @@
+# Cloudflare Tunnel overlay for docker-compose.
+#
+# Activate:
+#   docker compose -f docker-compose.yml -f docker-compose.tunnel.yml up -d
+#
+# Requires infra/tunnel/config.yml + infra/tunnel/cloudflared.json
+# (see infra/tunnel/README.md for setup).
+
+services:
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    command: tunnel --no-autoupdate --config /etc/cloudflared/config.yml run
+    volumes:
+      - ./infra/tunnel/config.yml:/etc/cloudflared/config.yml:ro
+      - ./infra/tunnel/cloudflared.json:/etc/cloudflared/cloudflared.json:ro
+    depends_on:
+      - app

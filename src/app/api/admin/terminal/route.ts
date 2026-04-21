@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { spawn } from "node:child_process";
 import { isAdmin, isAdminHeader } from "@/lib/session";
+import { execShell } from "@/lib/shell-exec";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -38,60 +38,15 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "command required" }, { status: 400 });
   }
 
-  const start = Date.now();
-  const result = await execShell(command, cwd);
+  const result = await execShell(command, {
+    cwd,
+    timeoutMs: TIMEOUT_MS,
+    maxOutput: MAX_OUTPUT,
+  });
   return NextResponse.json({
     ...result,
-    durationMs: Date.now() - start,
     host: detectHost(),
     cwd: cwd ?? process.cwd(),
-  });
-}
-
-function execShell(
-  command: string,
-  cwd?: string,
-): Promise<{ stdout: string; stderr: string; exitCode: number | null; timedOut: boolean }> {
-  return new Promise((resolve) => {
-    const child = spawn("/bin/sh", ["-c", command], {
-      cwd: cwd && cwd.startsWith("/") ? cwd : undefined,
-      env: { ...process.env, PATH: process.env.PATH ?? "/usr/bin:/bin" },
-    });
-    let stdout = "";
-    let stderr = "";
-    let timedOut = false;
-    const killTimer = setTimeout(() => {
-      timedOut = true;
-      child.kill("SIGKILL");
-    }, TIMEOUT_MS);
-
-    child.stdout.on("data", (b: Buffer) => {
-      stdout += b.toString("utf8");
-      if (stdout.length > MAX_OUTPUT) {
-        stdout = stdout.slice(0, MAX_OUTPUT) + "\n…[truncated]";
-        child.kill("SIGKILL");
-      }
-    });
-    child.stderr.on("data", (b: Buffer) => {
-      stderr += b.toString("utf8");
-      if (stderr.length > MAX_OUTPUT) {
-        stderr = stderr.slice(0, MAX_OUTPUT) + "\n…[truncated]";
-        child.kill("SIGKILL");
-      }
-    });
-    child.on("error", (err) => {
-      clearTimeout(killTimer);
-      resolve({
-        stdout,
-        stderr: stderr + `\n[spawn error: ${err.message}]`,
-        exitCode: null,
-        timedOut,
-      });
-    });
-    child.on("close", (code) => {
-      clearTimeout(killTimer);
-      resolve({ stdout, stderr, exitCode: code, timedOut });
-    });
   });
 }
 

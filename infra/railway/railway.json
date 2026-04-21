@@ -1,0 +1,31 @@
+{
+  "$schema": "https://railway.app/railway.schema.json",
+  "build": {
+    "builder": "DOCKERFILE",
+    "dockerfilePath": "Dockerfile"
+  },
+  "deploy": {
+    "numReplicas": 1,
+    "restartPolicyType": "ON_FAILURE",
+    "restartPolicyMaxRetries": 10,
+    "healthcheckPath": "/api/providers/health",
+    "healthcheckTimeout": 60,
+    "startCommand": "node server.js"
+  },
+  "environments": {
+    "production": {
+      "variables": {
+        "NODE_ENV": "production",
+        "AURORA_STORAGE": "sqlite",
+        "AURORA_SQLITE_PATH": "/data/aurora.db",
+        "AURORA_NEST_HOST": "railway.app",
+        "PORT": "3000"
+      }
+    }
+  },
+  "_notes": [
+    "Railway needs a persistent volume mounted at /data for SQLite.",
+    "Add it in the dashboard: Service → Settings → Volumes → /data.",
+    "Or run: railway up && railway volume create --mount-path /data --size 1GB"
+  ]
+}

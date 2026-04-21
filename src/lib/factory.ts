@@ -1,4 +1,4 @@
-import { createId, FactoryJob, getStore, JobStep } from "./store";
+import { createId, FactoryJob, getStore, JobStep, putJob } from "./store";
 import { MissingKeyError, generateVoiceover } from "./tts";
 import { fetchPollinationsImage } from "./images";
 import { composeSceneFrame, renderMp4 } from "./render";
@@ -73,7 +73,6 @@ function bpmForMood(mood: string): number {
 }
 
 export function enqueueJob(input: FactoryInput): FactoryJob {
-  const store = getStore();
   const now = new Date().toISOString();
   const job: FactoryJob = {
     id: createId("job"),
@@ -87,7 +86,7 @@ export function enqueueJob(input: FactoryInput): FactoryJob {
     steps: buildSteps(),
     requestedBy: input.requestedBy,
   };
-  store.jobs.set(job.id, job);
+  putJob(job);
   void runPipeline(job.id);
   return job;
 }
@@ -230,6 +229,7 @@ export function cancelJob(id: string): boolean {
       step.finishedAt = job.updatedAt;
     }
   }
+  putJob(job);
   return true;
 }
 

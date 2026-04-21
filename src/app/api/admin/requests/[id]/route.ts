@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { isAdmin } from "@/lib/session";
-import { getStore } from "@/lib/store";
+import { getStore, putRequest } from "@/lib/store";
 
 export async function PATCH(
   request: NextRequest,
@@ -15,6 +15,7 @@ export async function PATCH(
   const req = store.userRequests.get(id);
   if (!req) return NextResponse.json({ error: "not found" }, { status: 404 });
   if (typeof body.resolved === "boolean") req.resolved = body.resolved;
+  putRequest(req);
   return NextResponse.json({ request: req });
 }
 

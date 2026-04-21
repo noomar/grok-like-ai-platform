@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createId, getStore } from "@/lib/store";
+import { createId, incrementVerifications, putRequest } from "@/lib/store";
 import { SESSION_COOKIE } from "@/lib/session";
 
 const WHATSAPP_URL = "https://wa.me/996500904998";
@@ -13,19 +13,16 @@ export async function POST(request: NextRequest) {
       ? nextParam
       : "/dashboard";
 
-  const store = getStore();
-  store.verifications += 1;
-  store.userRequests.set(
-    createId("req"),
-    {
-      id: createId("req"),
-      userLabel: "guest · WhatsApp gate",
-      kind: "verification",
-      message: `Verification initiated → ${safeNext}`,
-      createdAt: new Date().toISOString(),
-      resolved: false,
-    },
-  );
+  incrementVerifications();
+  const requestId = createId("req");
+  putRequest({
+    id: requestId,
+    userLabel: "guest · WhatsApp gate",
+    kind: "verification",
+    message: `Verification initiated → ${safeNext}`,
+    createdAt: new Date().toISOString(),
+    resolved: false,
+  });
 
   const response = NextResponse.redirect(WHATSAPP_URL, { status: 303 });
   response.cookies.set(SESSION_COOKIE, "1", {

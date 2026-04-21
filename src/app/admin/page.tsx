@@ -60,6 +60,9 @@ export default async function AdminHome() {
           <Link href="/admin/settings" className="rounded-lg px-3 py-2 hover:bg-white/5 hover:text-white">
             Settings
           </Link>
+          <Link href="/admin/nest" className="rounded-lg px-3 py-2 hover:bg-white/5 hover:text-white">
+            Nest control
+          </Link>
           <Link href="/dashboard" className="mt-4 rounded-lg px-3 py-2 text-white/60 hover:bg-white/5 hover:text-white">
             ← Back to dashboard
           </Link>

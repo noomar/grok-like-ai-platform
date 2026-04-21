@@ -31,6 +31,24 @@ export async function isAdmin(): Promise<boolean> {
   return store.get(ADMIN_COOKIE)?.value === "1";
 }
 
+/**
+ * Header-based admin check used by automation (migration CLI, heartbeat
+ * workflow). Compares `x-admin-password` against `ADMIN_PASSWORD`.
+ * Intentionally lax on the dev default so the "aurora-admin" password works
+ * locally, but in production you MUST set ADMIN_PASSWORD to something strong.
+ */
+export function isAdminHeader(headerValue: string | undefined): boolean {
+  if (!headerValue) return false;
+  const expected = process.env.ADMIN_PASSWORD ?? "aurora-admin";
+  // Constant-time-ish compare.
+  if (headerValue.length !== expected.length) return false;
+  let diff = 0;
+  for (let i = 0; i < headerValue.length; i += 1) {
+    diff |= headerValue.charCodeAt(i) ^ expected.charCodeAt(i);
+  }
+  return diff === 0;
+}
+
 export async function setAdmin() {
   const store = await cookies();
   store.set(ADMIN_COOKIE, "1", {

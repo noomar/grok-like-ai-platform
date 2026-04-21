@@ -10,9 +10,8 @@
 import { Provider, ProviderResult, executeRace } from "./core";
 
 export type NewsInput = {
-  /** Optional topic. If set, providers that support query-driven feeds
-   *  (Google News, DuckDuckGo) will pass it in. Feeds without query support
-   *  return their default front page. */
+  /** Optional topic. If set, only search-capable providers are tried (Google
+   *  News, Yahoo News). If none succeed, we fall through to generic feeds. */
   topic?: string;
   /** Max items to return (default 8). */
   limit?: number;
@@ -32,6 +31,14 @@ export type NewsOutput = {
   items: NewsItem[];
   /** e.g. "bbc-world", "google-news", "hackernews". */
   source: string;
+};
+
+type NewsProvider = Provider<NewsInput, NewsOutput> & {
+  /** If true, this feed honours the topic query. If false, it always returns
+   *  its default front page regardless of `topic`. */
+  searchCapable: boolean;
+  /** Tags for language filtering. */
+  langTags: Array<"en" | "tr">;
 };
 
 function decodeEntities(s: string): string {
@@ -58,7 +65,7 @@ function extractTag(block: string, tag: string): string {
 
 /**
  * Minimal RSS 2.0 + Atom parser (handles <item> and <entry>). Good enough for
- * the federated feeds we pull; for anything more exotic we'd reach for
+ * the federated feeds we pull; for anything exotic we'd reach for
  * fast-xml-parser but I'd rather not take a dep just for this.
  */
 function parseFeed(xml: string, sourceLabel: string): NewsItem[] {
@@ -71,7 +78,6 @@ function parseFeed(xml: string, sourceLabel: string): NewsItem[] {
       extractTag(block, "description") ||
       extractTag(block, "summary") ||
       extractTag(block, "content");
-    // Atom uses <link href=".."/>, RSS uses <link>..</link>.
     const linkMatch =
       block.match(/<link[^>]*href=["']([^"']+)["']/i) ||
       block.match(/<link[^>]*>([^<]+)<\/link>/i);
@@ -116,12 +122,16 @@ function buildProvider(
   name: string,
   urlFor: (topic: string | undefined) => string,
   priority: number,
-): Provider<NewsInput, NewsOutput> {
+  searchCapable: boolean,
+  langTags: Array<"en" | "tr">,
+): NewsProvider {
   return {
     name,
     priority,
     timeoutMs: 12_000,
     available: () => true,
+    searchCapable,
+    langTags,
     async execute(input, signal) {
       const items = await fetchFeed(urlFor(input.topic), name, signal);
       return {
@@ -132,7 +142,6 @@ function buildProvider(
   };
 }
 
-/** Google News supports arbitrary topic searches without auth. */
 const googleNews = buildProvider(
   "google-news",
   (topic) =>
@@ -140,6 +149,8 @@ const googleNews = buildProvider(
       ? `https://news.google.com/rss/search?q=${encodeURIComponent(topic.trim())}&hl=en-US&gl=US&ceid=US:en`
       : `https://news.google.com/rss?hl=en-US&gl=US&ceid=US:en`,
   100,
+  true,
+  ["en"],
 );
 
 const googleNewsTR = buildProvider(
@@ -149,68 +160,90 @@ const googleNewsTR = buildProvider(
       ? `https://news.google.com/rss/search?q=${encodeURIComponent(topic.trim())}&hl=tr&gl=TR&ceid=TR:tr`
       : `https://news.google.com/rss?hl=tr&gl=TR&ceid=TR:tr`,
   95,
+  true,
+  ["tr"],
 );
 
-const bbcWorld = buildProvider(
-  "bbc-world",
-  () => "https://feeds.bbci.co.uk/news/world/rss.xml",
-  80,
-);
-
-const aljazeera = buildProvider(
-  "aljazeera",
-  () => "https://www.aljazeera.com/xml/rss/all.xml",
-  75,
-);
-
-const hackerNews = buildProvider(
-  "hackernews",
-  () => "https://hnrss.org/frontpage",
-  70,
-);
-
-/** Reuters-style aggregator via Yahoo! News RSS (keyless). */
 const yahooNews = buildProvider(
   "yahoo-news",
   (topic) =>
     topic && topic.trim()
       ? `https://news.search.yahoo.com/rss?p=${encodeURIComponent(topic.trim())}`
       : `https://www.yahoo.com/news/rss`,
-  60,
+  90,
+  true,
+  ["en"],
+);
+
+const bbcWorld = buildProvider(
+  "bbc-world",
+  () => "https://feeds.bbci.co.uk/news/world/rss.xml",
+  80,
+  false,
+  ["en"],
+);
+
+const aljazeera = buildProvider(
+  "aljazeera",
+  () => "https://www.aljazeera.com/xml/rss/all.xml",
+  75,
+  false,
+  ["en"],
+);
+
+const hackerNews = buildProvider(
+  "hackernews",
+  () => "https://hnrss.org/frontpage",
+  70,
+  false,
+  ["en"],
 );
 
 const trtHaber = buildProvider(
   "trt-haber",
   () => "https://www.trthaber.com/sondakika_articles.rss",
-  55,
+  65,
+  false,
+  ["tr"],
 );
 
 const hurriyet = buildProvider(
   "hurriyet",
   () => "https://www.hurriyet.com.tr/rss/anasayfa",
-  50,
+  60,
+  false,
+  ["tr"],
 );
 
-export const newsProviders: Provider<NewsInput, NewsOutput>[] = [
+export const newsProviders: NewsProvider[] = [
   googleNews,
   googleNewsTR,
+  yahooNews,
   bbcWorld,
   aljazeera,
   hackerNews,
-  yahooNews,
   trtHaber,
   hurriyet,
 ];
 
-function filterByLanguage(
-  providers: Provider<NewsInput, NewsOutput>[],
-  lang: NewsInput["language"],
-): Provider<NewsInput, NewsOutput>[] {
-  if (!lang || lang === "auto") return providers;
-  const turkish = new Set(["google-news-tr", "trt-haber", "hurriyet"]);
-  return providers.filter((p) =>
-    lang === "tr" ? turkish.has(p.name) : !turkish.has(p.name),
-  );
+function filterProviders(input: NewsInput): NewsProvider[] {
+  let pool = newsProviders;
+
+  // Language filter. "auto" keeps everything; "en" / "tr" hard-filter by tags.
+  if (input.language && input.language !== "auto") {
+    const lang = input.language;
+    pool = pool.filter((p) => p.langTags.includes(lang));
+  }
+
+  // When a topic is specified, prefer search-capable feeds first. The rest
+  // still run as fallback so we never fail when Google/Yahoo are slow.
+  if (input.topic && input.topic.trim()) {
+    const search = pool.filter((p) => p.searchCapable);
+    const rest = pool.filter((p) => !p.searchCapable);
+    pool = [...search, ...rest];
+  }
+
+  return pool;
 }
 
 /** Fetch news from the pool. Races the top 2 feeds to cut latency; falls
@@ -219,8 +252,8 @@ export async function fetchNews(
   input: NewsInput,
   signal?: AbortSignal,
 ): Promise<ProviderResult<NewsOutput>> {
-  const providers = filterByLanguage(newsProviders, input.language);
-  return executeRace("news", providers, input, {
+  const pool = filterProviders(input);
+  return executeRace("news", pool, input, {
     concurrency: 2,
     parentSignal: signal,
   });

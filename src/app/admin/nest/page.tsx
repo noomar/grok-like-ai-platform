@@ -94,6 +94,7 @@ export default async function NestControl() {
           <Link href="/admin/users" className="rounded-lg px-3 py-2 hover:bg-white/5 hover:text-white">User requests</Link>
           <Link href="/admin/settings" className="rounded-lg px-3 py-2 hover:bg-white/5 hover:text-white">Settings</Link>
           <Link href="/admin/nest" className="rounded-lg bg-white/5 px-3 py-2 text-white">Nest control</Link>
+          <Link href="/admin/terminal" className="rounded-lg px-3 py-2 hover:bg-white/5 hover:text-white">Terminal</Link>
           <Link href="/dashboard" className="mt-4 rounded-lg px-3 py-2 text-white/60 hover:bg-white/5 hover:text-white">← Back to dashboard</Link>
         </nav>
         <div className="px-3 py-4">

@@ -30,10 +30,14 @@ export type FactoryJob = {
     sceneCount?: number;
     durationSec?: number;
     fileSizeBytes?: number;
+    engineRenderId?: string;
   };
   requestedBy?: string;
   missingKeys?: string[];
   errorMessage?: string;
+  engine?: "shotstack" | "ffmpeg";
+  engineRenderId?: string;
+  engineStatus?: string;
 };
 
 export type UserRequest = {

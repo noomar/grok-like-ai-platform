@@ -36,10 +36,13 @@ const MOODS = [
 ];
 
 type EnvStatus = {
-  tts: { provider: string; ready: boolean; keyName: string };
+  pipelineReady: boolean;
+  primaryEngine: "shotstack" | "ffmpeg";
+  tts: { provider: string; ready: boolean; keyName: string; required: boolean };
+  video: { provider: string; ready: boolean; keyName: string };
+  shotstack: { provider: string; ready: boolean; keyName: string };
   storage: { provider: string; ready: boolean; persistent: boolean; keyName: string };
   images: { provider: string; ready: boolean };
-  alternateVideo: { provider: string; ready: boolean; keyName: string };
 };
 
 export default function FactoryConsole({ initialJobs }: { initialJobs: FactoryJob[] }) {
@@ -355,12 +358,20 @@ export default function FactoryConsole({ initialJobs }: { initialJobs: FactoryJo
 }
 
 function EnvStatusBanner({ status }: { status: EnvStatus }) {
-  const missing: string[] = [];
-  if (!status.tts.ready) missing.push(status.tts.keyName);
-  if (!status.storage.persistent) {
-    // Non-blocking hint: local /tmp works on single instance but won't persist across deploys.
+  if (status.pipelineReady) {
+    return (
+      <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/5 p-4 lg:col-span-2">
+        <div className="flex items-center gap-2 text-sm font-medium text-emerald-200">
+          <ShieldAlert className="h-4 w-4" />
+          Engine: {status.primaryEngine === "shotstack" ? "Shotstack (hosted)" : "ffmpeg (local)"} ·{" "}
+          TTS: {status.tts.ready ? "OpenAI" : "silent"} ·{" "}
+          Storage: {status.storage.provider}
+          {!status.storage.persistent && " (ephemeral /tmp — set BLOB_READ_WRITE_TOKEN for persistence)"}
+        </div>
+      </div>
+    );
   }
-  if (missing.length === 0) return null;
+
   return (
     <div className="rounded-xl border border-amber-500/30 bg-amber-500/5 p-4 lg:col-span-2">
       <div className="flex items-center gap-2 text-sm font-medium text-amber-200">
@@ -368,14 +379,12 @@ function EnvStatusBanner({ status }: { status: EnvStatus }) {
         Production blocked — missing environment variables
       </div>
       <div className="mt-1 text-xs text-amber-100/80">
-        Set the following on your host (Vercel → Project → Settings → Environment Variables) and redeploy:
+        Set at least one of these on your host (Vercel → Project → Settings → Environment Variables) and redeploy:
       </div>
       <div className="mt-2 flex flex-wrap gap-2 text-xs">
-        {missing.map((k) => (
-          <code key={k} className="rounded bg-amber-500/20 px-2 py-1 text-amber-100">
-            {k}
-          </code>
-        ))}
+        <code className="rounded bg-amber-500/20 px-2 py-1 text-amber-100">SHOTSTACK_API_KEY</code>
+        <span className="text-amber-100/60">or</span>
+        <code className="rounded bg-amber-500/20 px-2 py-1 text-amber-100">OPENAI_API_KEY</code>
       </div>
       {!status.storage.persistent && (
         <div className="mt-2 text-xs text-amber-100/70">

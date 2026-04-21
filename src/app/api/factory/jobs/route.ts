@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { enqueueJob, listJobs, submitShotstackJob } from "@/lib/factory";
+import { enqueueJob, listJobs, submitVideoJob } from "@/lib/factory";
 import { hasKey } from "@/lib/env";
 import { MissingKeyError } from "@/lib/tts";
 
@@ -38,12 +38,12 @@ export async function POST(request: NextRequest) {
     requestedBy: body.requestedBy,
   };
 
-  // On serverless hosts (or whenever Shotstack is the primary engine) we
-  // submit synchronously to Shotstack and return the engineRenderId so the
-  // client can poll `/api/factory/status` without relying on server state.
-  if (hasKey("SHOTSTACK_API_KEY")) {
+  // Use the provider-agnostic video pool when any hosted renderer is
+  // configured. Shotstack is tried first (if SHOTSTACK_API_KEY set), then
+  // the self-hosted HF Space worker (if HF_RENDER_URL set).
+  if (hasKey("SHOTSTACK_API_KEY") || hasKey("HF_RENDER_URL")) {
     try {
-      const job = await submitShotstackJob(input);
+      const job = await submitVideoJob(input);
       return NextResponse.json({ job }, { status: 201 });
     } catch (err) {
       if (err instanceof MissingKeyError) {
@@ -59,8 +59,9 @@ export async function POST(request: NextRequest) {
     }
   }
 
-  // Fallback: in-process pipeline (ffmpeg path). Only useful on a long-lived
-  // host because it relies on the in-memory store.
+  // Fallback: in-process ffmpeg pipeline. Only useful on a long-lived host
+  // because it relies on the in-memory store + async background work that
+  // Vercel serverless would kill when the HTTP handler returns.
   const job = enqueueJob(input);
   return NextResponse.json({ job }, { status: 201 });
 }

@@ -35,9 +35,15 @@ export type FactoryJob = {
   requestedBy?: string;
   missingKeys?: string[];
   errorMessage?: string;
-  engine?: "shotstack" | "ffmpeg";
+  engine?: "shotstack" | "ffmpeg" | "hf-space";
   engineRenderId?: string;
   engineStatus?: string;
+  /** Health of each provider pool at submit time (best-effort snapshot). */
+  providerTrace?: {
+    images?: string;
+    tts?: string;
+    video?: string;
+  };
 };
 
 export type UserRequest = {

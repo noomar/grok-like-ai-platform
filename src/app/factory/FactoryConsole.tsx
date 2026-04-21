@@ -91,7 +91,6 @@ export default function FactoryConsole({ initialJobs }: { initialJobs: FactoryJo
       return [...prev, ...stored.filter((j) => !seen.has(j.id))];
     });
     if (!selectedId && stored[0]) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
       setSelectedId(stored[0].id);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps

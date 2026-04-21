@@ -9,6 +9,8 @@ import {
   pollShotstackRender,
   pollinationsImageUrl,
 } from "./shotstack";
+import { fetchSceneImage } from "./providers/images";
+import { submitVideoRender, VideoScene } from "./providers/video";
 
 export type FactoryInput = {
   title: string;
@@ -91,17 +93,19 @@ export function enqueueJob(input: FactoryInput): FactoryJob {
 }
 
 /**
- * Submit a job synchronously to Shotstack and return the initial FactoryJob
- * with `engineRenderId` populated. The client is responsible for polling
- * `/api/factory/status?renderId=...` to track completion. This avoids relying
- * on any server-side state — important on serverless (Vercel Hobby) where the
- * in-memory store does not survive between invocations and async work started
- * by `enqueueJob` is killed when the function returns.
+ * Submit a job synchronously through the provider pools (images + video) and
+ * return the initial FactoryJob with `engineRenderId` populated. The client
+ * polls `/api/factory/status?renderId=<provider>:<id>` to track completion.
+ *
+ * Provider fallback order (no server-side state required):
+ *   images → pollinations → aihorde → picsum
+ *   video  → shotstack (if key) → hf-space (if HF_RENDER_URL)
+ *
+ * If no hosted video provider is available we surface a clear error — the
+ * local ffmpeg pipeline lives under `enqueueJob` because it needs an async
+ * worker that serverless hosts can't run inside a single request.
  */
-export async function submitShotstackJob(input: FactoryInput): Promise<FactoryJob> {
-  if (!hasKey("SHOTSTACK_API_KEY")) {
-    throw new MissingKeyError("SHOTSTACK_API_KEY");
-  }
+export async function submitVideoJob(input: FactoryInput): Promise<FactoryJob> {
   const now = new Date().toISOString();
   const id = createId("job");
   const title = input.title.trim() || "Untitled production";
@@ -119,25 +123,59 @@ export async function submitShotstackJob(input: FactoryInput): Promise<FactoryJo
 
   markDone(
     0,
-    `${sceneTexts.length} scene${sceneTexts.length === 1 ? "" : "s"} detected · ~${totalDurationSec}s · engine=shotstack`,
+    `${sceneTexts.length} scene${sceneTexts.length === 1 ? "" : "s"} detected · ~${totalDurationSec}s`,
   );
-  markDone(1, `skipped (no OPENAI_API_KEY · Shotstack silent render)`);
+  markDone(1, `skipped (voiceover disabled for hosted silent render)`);
 
-  const scenes = sceneTexts.map((text, i) => ({
-    imageUrl: pollinationsImageUrl(
-      buildImagePrompt(title, text),
-      (i + 1) * 97 + (Math.abs(hashCode(id)) % 1000),
+  // Run the image pool for every scene. We ask for `urlOnly` because the
+  // hosted video providers (shotstack, hf-space) need publicly fetchable URLs.
+  const seedBase = Math.abs(hashCode(id));
+  const imageResults = await Promise.all(
+    sceneTexts.map((text, i) =>
+      fetchSceneImage({
+        prompt: buildImagePrompt(title, text),
+        seed: (i + 1) * 97 + (seedBase % 1000),
+        width: 1280,
+        height: 720,
+        urlOnly: true,
+      }).catch((err: Error) => ({ ok: false as const, error: err.message })),
     ),
-    text,
-    durationSec: alignedDurations[i],
-  }));
-  markDone(2, `${scenes.length} scenes prepared · Pollinations image URLs · Shotstack timeline`);
-  markDone(3, `mood=${input.musicMood ?? DEFAULT_MOOD} · silent (no public audio URL)`);
+  );
 
-  const renderId = await createShotstackRender(scenes, null);
+  const scenes: VideoScene[] = imageResults.map((r, i) => {
+    if ("ok" in r && r.ok === false) {
+      // Every provider failed — still render with a seeded picsum URL so the
+      // render doesn't collapse; it's the same last-resort provider the pool
+      // would have used.
+      const fallbackSeed = (i + 1) * 97 + (seedBase % 1000);
+      return {
+        imageUrl: `https://picsum.photos/seed/${fallbackSeed}/1280/720`,
+        text: sceneTexts[i],
+        durationSec: alignedDurations[i],
+      };
+    }
+    return {
+      imageUrl: r.value.url,
+      text: sceneTexts[i],
+      durationSec: alignedDurations[i],
+    };
+  });
+  const imageProvidersUsed = imageResults
+    .filter((r): r is Exclude<typeof r, { ok: false }> => "ok" in r && r.ok === true)
+    .map((r) => r.provider);
+  const imageSummary =
+    imageProvidersUsed.length > 0
+      ? `providers: ${[...new Set(imageProvidersUsed)].join(", ")}`
+      : "fallback: picsum seeded";
+  markDone(2, `${scenes.length} scenes prepared · ${imageSummary}`);
+  markDone(3, `mood=${input.musicMood ?? DEFAULT_MOOD} · silent`);
+
+  // Submit to the video pool (shotstack preferred; hf-space fallback).
+  const videoRes = await submitVideoRender({ scenes, audioUrl: null });
+  const compoundRenderId = `${videoRes.value.provider}:${videoRes.value.renderId}`;
   steps[4].status = "running";
   steps[4].startedAt = now;
-  steps[4].output = `submitted to Shotstack · id=${renderId}`;
+  steps[4].output = `submitted to ${videoRes.value.provider} · id=${videoRes.value.renderId}`;
 
   return {
     id,
@@ -150,17 +188,24 @@ export async function submitShotstackJob(input: FactoryInput): Promise<FactoryJo
     updatedAt: now,
     steps,
     requestedBy: input.requestedBy,
-    engine: "shotstack",
-    engineRenderId: renderId,
+    engine: videoRes.value.provider === "hf-space" ? "hf-space" : "shotstack",
+    engineRenderId: compoundRenderId,
     engineStatus: "queued",
+    providerTrace: {
+      images: [...new Set(imageProvidersUsed)].join(",") || "picsum",
+      video: videoRes.value.provider,
+    },
     assets: {
       thumbnailUrl: scenes[0]?.imageUrl,
       sceneCount: scenes.length,
       durationSec: totalDurationSec,
-      engineRenderId: renderId,
+      engineRenderId: compoundRenderId,
     },
   };
 }
+
+/** @deprecated Use submitVideoJob. Kept for backwards compatibility. */
+export const submitShotstackJob = submitVideoJob;
 
 export function listJobs(): FactoryJob[] {
   return Array.from(getStore().jobs.values()).sort((a, b) =>
@@ -431,32 +476,54 @@ function hashCode(s: string): number {
 export function environmentStatus() {
   const shotstackReady = hasKey("SHOTSTACK_API_KEY");
   const openaiReady = hasKey("OPENAI_API_KEY");
-  const primaryEngine: "shotstack" | "ffmpeg" = shotstackReady ? "shotstack" : "ffmpeg";
-  // Pipeline is "ready" if either engine has its required keys.
-  // - shotstack: only needs SHOTSTACK_API_KEY (audio is optional)
-  // - ffmpeg: needs OPENAI_API_KEY for the voiceover
-  const pipelineReady = shotstackReady || openaiReady;
+  const hfSpaceReady = hasKey("HF_RENDER_URL");
+  const primaryEngine: "shotstack" | "hf-space" | "ffmpeg" = shotstackReady
+    ? "shotstack"
+    : hfSpaceReady
+      ? "hf-space"
+      : "ffmpeg";
+  // Pipeline is "ready" if any hosted engine is configured, OR if ffmpeg
+  // fallback has OpenAI TTS (for audio track).
+  const pipelineReady = shotstackReady || hfSpaceReady || openaiReady;
   return {
     pipelineReady,
     primaryEngine,
     tts: {
-      provider: "openai",
-      ready: openaiReady,
+      // TTS pool: edge-tts (keyless) + gtts (keyless) + openai (optional)
+      // So TTS is always "ready" even if no key is set.
+      provider: "edge-tts → gtts → openai",
+      ready: true,
       keyName: "OPENAI_API_KEY",
-      required: primaryEngine === "ffmpeg",
+      required: false,
+      pool: ["edge-tts", "gtts", ...(openaiReady ? ["openai"] : [])],
     },
     video: {
       provider: primaryEngine,
-      ready: primaryEngine === "shotstack" ? shotstackReady : openaiReady,
-      keyName: primaryEngine === "shotstack" ? "SHOTSTACK_API_KEY" : "OPENAI_API_KEY",
+      ready: primaryEngine !== "ffmpeg" ? true : openaiReady,
+      keyName:
+        primaryEngine === "shotstack"
+          ? "SHOTSTACK_API_KEY"
+          : primaryEngine === "hf-space"
+            ? "HF_RENDER_URL"
+            : "OPENAI_API_KEY",
+      pool: [
+        ...(shotstackReady ? ["shotstack"] : []),
+        ...(hfSpaceReady ? ["hf-space"] : []),
+      ],
     },
     shotstack: { provider: "shotstack", ready: shotstackReady, keyName: "SHOTSTACK_API_KEY" },
+    hfSpace: { provider: "hf-space", ready: hfSpaceReady, keyName: "HF_RENDER_URL" },
     storage: {
       provider: hasKey("BLOB_READ_WRITE_TOKEN") ? "vercel-blob" : "local-tmp",
       ready: true,
       persistent: hasKey("BLOB_READ_WRITE_TOKEN"),
       keyName: "BLOB_READ_WRITE_TOKEN",
     },
-    images: { provider: "pollinations", ready: true, keyName: null },
+    images: {
+      provider: "pollinations → aihorde → picsum",
+      ready: true,
+      keyName: null,
+      pool: ["pollinations", "aihorde", "picsum"],
+    },
   };
 }

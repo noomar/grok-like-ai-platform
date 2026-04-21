@@ -1,4 +1,10 @@
-export type RequiredKey = "OPENAI_API_KEY" | "SHOTSTACK_API_KEY" | "BLOB_READ_WRITE_TOKEN" | "ELEVENLABS_API_KEY";
+export type RequiredKey =
+  | "OPENAI_API_KEY"
+  | "SHOTSTACK_API_KEY"
+  | "BLOB_READ_WRITE_TOKEN"
+  | "ELEVENLABS_API_KEY"
+  | "HF_RENDER_URL"
+  | "HF_RENDER_TOKEN";
 
 export function hasKey(key: RequiredKey): boolean {
   const v = process.env[key];

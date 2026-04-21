@@ -1,14 +1,18 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import {
   CheckCircle2,
   Circle,
   Clapperboard,
+  Download,
+  ExternalLink,
   Factory as FactoryIcon,
   Loader2,
   Music,
   Play,
+  ShieldAlert,
   Sparkles,
   Waves,
   X,
@@ -31,6 +35,13 @@ const MOODS = [
   { id: "pop-energetic", label: "Pop energetic" },
 ];
 
+type EnvStatus = {
+  tts: { provider: string; ready: boolean; keyName: string };
+  storage: { provider: string; ready: boolean; persistent: boolean; keyName: string };
+  images: { provider: string; ready: boolean };
+  alternateVideo: { provider: string; ready: boolean; keyName: string };
+};
+
 export default function FactoryConsole({ initialJobs }: { initialJobs: FactoryJob[] }) {
   const [jobs, setJobs] = useState<FactoryJob[]>(initialJobs);
   const [title, setTitle] = useState("");
@@ -39,9 +50,17 @@ export default function FactoryConsole({ initialJobs }: { initialJobs: FactoryJo
   const [mood, setMood] = useState(MOODS[0].id);
   const [submitting, setSubmitting] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(initialJobs[0]?.id ?? null);
+  const [envStatus, setEnvStatus] = useState<EnvStatus | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const activeJob = jobs.find((j) => j.id === selectedId) ?? jobs[0];
+
+  useEffect(() => {
+    fetch("/api/factory/env-status", { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => d && setEnvStatus(d as EnvStatus))
+      .catch(() => {});
+  }, []);
 
   useEffect(() => {
     async function refresh() {
@@ -50,7 +69,7 @@ export default function FactoryConsole({ initialJobs }: { initialJobs: FactoryJo
       const data = (await res.json()) as { jobs: FactoryJob[] };
       setJobs(data.jobs);
     }
-    timerRef.current = setInterval(refresh, 1200);
+    timerRef.current = setInterval(refresh, 1500);
     return () => {
       if (timerRef.current) clearInterval(timerRef.current);
     };
@@ -79,6 +98,8 @@ export default function FactoryConsole({ initialJobs }: { initialJobs: FactoryJo
 
   return (
     <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+      {envStatus && <EnvStatusBanner status={envStatus} />}
+
       <section className="panel p-5">
         <div className="mb-4 flex items-center gap-2 text-sm font-semibold uppercase tracking-widest text-white/70">
           <FactoryIcon className="h-4 w-4 text-fuchsia-300" />
@@ -169,14 +190,33 @@ export default function FactoryConsole({ initialJobs }: { initialJobs: FactoryJo
         {activeJob && (
           <div>
             <div className="flex items-center justify-between">
-              <div>
-                <div className="text-sm font-medium text-white">{activeJob.title}</div>
+              <div className="min-w-0">
+                <div className="truncate text-sm font-medium text-white">{activeJob.title}</div>
                 <div className="text-xs text-white/50">
                   {activeJob.voice} · {activeJob.musicMood}
                 </div>
               </div>
               <StatusBadge status={activeJob.status} />
             </div>
+
+            {activeJob.status === "failed" && activeJob.errorMessage && (
+              <div className="mt-3 rounded-lg border border-rose-500/30 bg-rose-500/10 p-3 text-xs text-rose-100">
+                <div className="flex items-center gap-2 font-medium text-rose-200">
+                  <ShieldAlert className="h-3.5 w-3.5" />
+                  {activeJob.errorMessage}
+                </div>
+                {activeJob.missingKeys?.length ? (
+                  <div className="mt-2">
+                    Missing:{" "}
+                    {activeJob.missingKeys.map((k) => (
+                      <code key={k} className="mx-1 rounded bg-rose-500/20 px-1.5 py-0.5">
+                        {k}
+                      </code>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+            )}
 
             <ol className="mt-4 space-y-2">
               {activeJob.steps.map((s) => (
@@ -192,15 +232,51 @@ export default function FactoryConsole({ initialJobs }: { initialJobs: FactoryJo
               ))}
             </ol>
 
-            {activeJob.assets && (
-              <div className="mt-4 grid grid-cols-2 gap-3 text-xs">
-                <div className="panel-tight p-3">
-                  <div className="text-white/50">Scenes</div>
-                  <div className="mt-1 text-base text-white">{activeJob.assets.sceneCount}</div>
+            {activeJob.assets?.videoUrl && activeJob.status === "completed" && (
+              <div className="mt-4 space-y-3">
+                <video
+                  controls
+                  preload="metadata"
+                  poster={activeJob.assets.thumbnailUrl}
+                  src={activeJob.assets.videoUrl}
+                  className="w-full rounded-lg border border-white/10 bg-black"
+                />
+                <div className="grid grid-cols-2 gap-3 text-xs">
+                  <div className="panel-tight p-3">
+                    <div className="text-white/50">Scenes</div>
+                    <div className="mt-1 text-base text-white">
+                      {activeJob.assets.sceneCount}
+                    </div>
+                  </div>
+                  <div className="panel-tight p-3">
+                    <div className="text-white/50">Duration</div>
+                    <div className="mt-1 text-base text-white">
+                      {activeJob.assets.durationSec}s
+                    </div>
+                  </div>
+                  <div className="panel-tight col-span-2 p-3">
+                    <div className="text-white/50">File</div>
+                    <div className="mt-1 text-sm text-white">
+                      MP4 ·{" "}
+                      {activeJob.assets.fileSizeBytes
+                        ? `${(activeJob.assets.fileSizeBytes / (1024 * 1024)).toFixed(2)} MB`
+                        : "?"}
+                    </div>
+                  </div>
                 </div>
-                <div className="panel-tight p-3">
-                  <div className="text-white/50">Duration</div>
-                  <div className="mt-1 text-base text-white">{activeJob.assets.durationSec}s</div>
+                <div className="flex flex-wrap gap-2">
+                  <a
+                    href={`${activeJob.assets.videoUrl}${activeJob.assets.videoUrl.includes("?") ? "&" : "?"}download=1`}
+                    className="btn-primary inline-flex items-center gap-2 px-3 py-2 text-xs"
+                  >
+                    <Download className="h-3.5 w-3.5" /> Download MP4
+                  </a>
+                  <Link
+                    href={`/factory/jobs/${activeJob.id}`}
+                    className="btn-ghost inline-flex items-center gap-2 px-3 py-2 text-xs"
+                  >
+                    <ExternalLink className="h-3.5 w-3.5" /> Open detail
+                  </Link>
                 </div>
               </div>
             )}
@@ -223,28 +299,90 @@ export default function FactoryConsole({ initialJobs }: { initialJobs: FactoryJo
           All productions
         </div>
         <div className="grid gap-2">
-          {jobs.length === 0 && <p className="text-sm text-white/50">No productions yet.</p>}
+          {jobs.length === 0 && (
+            <p className="text-sm text-white/50">
+              No productions yet. Queue your first script on the left.
+            </p>
+          )}
           {jobs.map((job) => (
-            <button
+            <div
               key={job.id}
-              id={job.id}
-              onClick={() => setSelectedId(job.id)}
               className={`panel-tight flex items-center justify-between gap-4 p-3 text-left transition hover:border-white/20 ${
                 selectedId === job.id ? "border-white/20 bg-white/[0.04]" : ""
               }`}
             >
-              <div className="min-w-0">
+              <button
+                onClick={() => setSelectedId(job.id)}
+                className="min-w-0 flex-1 text-left"
+              >
                 <div className="truncate text-sm font-medium text-white">{job.title}</div>
                 <div className="truncate text-xs text-white/50">
                   {job.voice} · {job.musicMood} ·{" "}
                   {new Date(job.createdAt).toLocaleString()}
                 </div>
+              </button>
+              <div className="flex items-center gap-2">
+                {job.status === "failed" && job.missingKeys?.length ? (
+                  <span className="rounded-full bg-rose-500/15 px-2 py-0.5 text-[10px] uppercase tracking-widest text-rose-200">
+                    Missing {job.missingKeys[0]}
+                  </span>
+                ) : (
+                  <StatusBadge status={job.status} />
+                )}
+                {job.assets?.videoUrl && job.status === "completed" && (
+                  <a
+                    href={`${job.assets.videoUrl}${job.assets.videoUrl.includes("?") ? "&" : "?"}download=1`}
+                    className="btn-ghost inline-flex items-center gap-1 px-2 py-1 text-[11px]"
+                    title="Download MP4"
+                  >
+                    <Download className="h-3 w-3" /> MP4
+                  </a>
+                )}
+                <Link
+                  href={`/factory/jobs/${job.id}`}
+                  className="btn-ghost inline-flex items-center gap-1 px-2 py-1 text-[11px]"
+                  title="Open job"
+                >
+                  <ExternalLink className="h-3 w-3" /> Open
+                </Link>
               </div>
-              <StatusBadge status={job.status} />
-            </button>
+            </div>
           ))}
         </div>
       </section>
+    </div>
+  );
+}
+
+function EnvStatusBanner({ status }: { status: EnvStatus }) {
+  const missing: string[] = [];
+  if (!status.tts.ready) missing.push(status.tts.keyName);
+  if (!status.storage.persistent) {
+    // Non-blocking hint: local /tmp works on single instance but won't persist across deploys.
+  }
+  if (missing.length === 0) return null;
+  return (
+    <div className="rounded-xl border border-amber-500/30 bg-amber-500/5 p-4 lg:col-span-2">
+      <div className="flex items-center gap-2 text-sm font-medium text-amber-200">
+        <ShieldAlert className="h-4 w-4" />
+        Production blocked — missing environment variables
+      </div>
+      <div className="mt-1 text-xs text-amber-100/80">
+        Set the following on your host (Vercel → Project → Settings → Environment Variables) and redeploy:
+      </div>
+      <div className="mt-2 flex flex-wrap gap-2 text-xs">
+        {missing.map((k) => (
+          <code key={k} className="rounded bg-amber-500/20 px-2 py-1 text-amber-100">
+            {k}
+          </code>
+        ))}
+      </div>
+      {!status.storage.persistent && (
+        <div className="mt-2 text-xs text-amber-100/70">
+          Storage: <strong>{status.storage.provider}</strong>. For persistent downloads on Vercel, set{" "}
+          <code className="rounded bg-amber-500/20 px-1.5 py-0.5">BLOB_READ_WRITE_TOKEN</code>.
+        </div>
+      )}
     </div>
   );
 }

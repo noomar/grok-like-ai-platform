@@ -1,11 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
+import { generateVoiceover, MissingKeyError } from "@/lib/tts";
+import { persistAsset } from "@/lib/storage";
+import { createId } from "@/lib/store";
+
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
 /**
- * Standalone Text-to-Speech endpoint.
- *
- * Swap this with a real provider (ElevenLabs, OpenAI, Azure, etc.) by
- * replacing the stub below with a fetch to your TTS API. Read credentials
- * from env vars (e.g. process.env.TTS_API_KEY) — never hardcode keys.
+ * Real Text-to-Speech. Calls OpenAI TTS, stores the MP3, returns a downloadable URL.
+ * Requires OPENAI_API_KEY.
  */
 export async function POST(request: NextRequest) {
   const body = (await request.json().catch(() => null)) as
@@ -16,14 +19,25 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "text is required" }, { status: 400 });
   }
 
-  const words = body.text.trim().split(/\s+/).filter(Boolean).length;
-  const durationSec = Math.max(2, Math.round(words / 2.5));
-
-  return NextResponse.json({
-    voice: body.voice ?? "aria-neural",
-    format: "mp3",
-    durationSec,
-    // In production: return a signed URL to the generated audio asset.
-    audioUrl: `/assets/tts/stub-${Date.now()}.mp3`,
-  });
+  try {
+    const result = await generateVoiceover(body.text, body.voice ?? "aria-neural");
+    const tmpId = createId("tts");
+    const asset = await persistAsset(tmpId, "audio.mp3", result.audioBuffer, "audio/mpeg");
+    return NextResponse.json({
+      voice: body.voice ?? "aria-neural",
+      format: "mp3",
+      durationSec: result.durationSec,
+      audioUrl: asset.url,
+      sizeBytes: asset.sizeBytes,
+    });
+  } catch (err) {
+    if (err instanceof MissingKeyError) {
+      return NextResponse.json(
+        { error: err.message, missingKey: err.keyName },
+        { status: 412 },
+      );
+    }
+    const message = err instanceof Error ? err.message : "TTS failed";
+    return NextResponse.json({ error: message }, { status: 500 });
+  }
 }
